@@ -16,7 +16,7 @@ from datetime import datetime, time, timedelta
 from typing import Callable, Optional, Sequence, TextIO
 
 from . import __version__
-from .fmt import format_when
+from .fmt import format_when, plural
 from .models import Alarm, AlarmDraft
 from .ringer import TerminalRinger
 from .runner import Runner
@@ -33,7 +33,7 @@ CHEAT_SHEET = """\
   alarm list       see all your alarms
   alarm edit 2     change alarm number 2
   alarm off 2      pause alarm number 2   (alarm on 2 turns it back on)
-  alarm delete 2   delete alarm number 2
+  alarm delete 2   delete alarm number 2   (alarm delete all deletes every alarm)
   alarm start      start the clock - leave it open so your alarms can ring!
   alarm sound      play the alarm sound, to check your volume
 
@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         "id", metavar="NUMBER")
     for name, help_ in (("off", "pause an alarm: alarm off 2"),
                         ("on", "turn an alarm back on: alarm on 2"),
-                        ("delete", "delete an alarm: alarm delete 2")):
+                        ("delete", "delete an alarm: alarm delete 2, or alarm delete all")):
         sub.add_parser(name, help=help_).add_argument("ids", nargs="+", metavar="NUMBER")
 
     start = sub.add_parser("start", help="start the clock so alarms can ring (leave it open)")
@@ -207,9 +207,39 @@ def _apply_to_ids(store: AlarmStore, ids: list[int],
 
 
 def cmd_delete(args, ctx: Context) -> None:
+    words = [w.lower() for w in args.ids]
+    if "all" in words:
+        if words != ["all"]:
+            raise UsageError("To delete every alarm, type just: alarm delete all")
+        _delete_all(ctx)
+        return
     ids = _parse_ids(args.ids)
     _apply_to_ids(ctx.store, ids, lambda alarms, a: alarms.remove(a))
     ctx.out.write(f"🗑  Deleted alarm {', '.join(map(str, ids))}.\n")
+
+
+def _delete_all(ctx: Context) -> None:
+    count = len(ctx.store.load())
+    if not count:
+        ctx.out.write("You don't have any alarms to delete.\n")
+        return
+    what = f"all {plural(count, 'alarm')}" if count > 1 else "your 1 alarm"
+    sure = ctx.prompter.ask(
+        f"🗑  Delete {what}? This can't be undone. Type yes to confirm: ",
+        lambda answer: answer.lower() in ("yes", "y"),
+    )
+    if not sure:  # anything but yes means no -- the safe way to be wrong
+        ctx.out.write("Nothing was deleted.\n")
+        return
+    deleted: list[Alarm] = []
+
+    def clear(alarms: list[Alarm]) -> None:
+        deleted.extend(alarms)  # counted at write time, after any changes meanwhile
+        alarms.clear()
+
+    ctx.store.update(clear)
+    ctx.out.write(f"🗑  Deleted {plural(len(deleted), 'alarm')}. "
+                  "Set a new one with: alarm set\n")
 
 
 def cmd_off(args, ctx: Context) -> None:

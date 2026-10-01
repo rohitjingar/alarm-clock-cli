@@ -58,6 +58,7 @@ There's one easy way to do each thing:
 | Change an alarm | `alarm edit 2` (same questions; ENTER keeps the current value) |
 | Pause / un-pause one | `alarm off 2` / `alarm on 2` |
 | Delete one | `alarm delete 2` |
+| Delete everything | `alarm delete all` (asks first; type `yes` to confirm) |
 | Start the clock | `alarm start` (leave the window open so alarms can ring!) |
 | Check the sound | `alarm sound` (plays the alarm sound once, to check your volume) |
 | Forgot? | `alarm` |
@@ -146,7 +147,7 @@ one save path. Input and output are passed in, so the question flow is tested by
 python3 -m unittest discover -s tests -t . -v
 ```
 
-There are **75 tests**, using only the standard library. They pass on Python 3.9.6
+There are **82 tests**, using only the standard library. They pass on Python 3.9.6
 (macOS system Python) and 3.14. They cover:
 
 - the question flow (every repeat option, AM/PM, 12 o'clock, wrong answers asked

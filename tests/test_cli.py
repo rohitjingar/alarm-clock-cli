@@ -186,6 +186,51 @@ class ListOnOffDeleteTest(CliTestCase):
         self.assertIn("no alarm number 99", err)
         self.assertEqual(len(self.store.load()), 1)  # all-or-nothing
 
+    def test_delete_all_after_typing_yes(self):
+        self.set_alarm("7:00", "am", "2", "")
+        self.set_alarm("8:00", "pm", "1", "")
+        code, out, _ = self.cli("delete", "all", answers=["yes"])
+        self.assertEqual(code, EXIT_OK)
+        self.assertIn("Delete all 2 alarms? This can't be undone.", out)
+        self.assertIn("Deleted 2 alarms.", out)
+        self.assertEqual(self.store.load(), [])
+
+    def test_delete_all_accepts_y_and_any_case(self):
+        self.set_alarm("7:00", "am", "2", "")
+        out = self.cli("delete", "ALL", answers=["Y"])[1]
+        self.assertIn("Delete your 1 alarm?", out)
+        self.assertEqual(self.store.load(), [])
+
+    def test_delete_all_anything_but_yes_keeps_everything(self):
+        self.set_alarm("7:00", "am", "2", "")
+        for answer in ("no", "", "yess", "n"):
+            with self.subTest(answer=answer):
+                out = self.cli("delete", "all", answers=[answer])[1]
+                self.assertIn("Nothing was deleted.", out)
+                self.assertEqual(len(self.store.load()), 1)
+
+    def test_delete_all_cancelled_with_ctrl_d_keeps_everything(self):
+        self.set_alarm("7:00", "am", "2", "")
+        code, out, _ = self.cli("delete", "all", answers=[])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("Cancelled. Nothing was changed.", out)
+        self.assertEqual(len(self.store.load()), 1)
+
+    def test_delete_all_with_no_alarms(self):
+        self.assertIn("don't have any alarms to delete", self.cli("delete", "all")[1])
+
+    def test_delete_all_mixed_with_numbers_is_refused(self):
+        self.set_alarm("7:00", "am", "2", "")
+        code, _, err = self.cli("delete", "all", "1", answers=["yes"])
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("type just: alarm delete all", err)
+        self.assertEqual(len(self.store.load()), 1)
+
+    def test_numbers_keep_counting_after_delete_all(self):
+        self.set_alarm("7:00", "am", "2", "")
+        self.cli("delete", "all", answers=["yes"])
+        self.assertIn("Alarm 2 set", self.set_alarm("8:00", "am", "2", ""))
+
     def test_ids_must_be_numbers(self):
         code, _, err = self.cli("off", "two")
         self.assertEqual(code, EXIT_USAGE)
