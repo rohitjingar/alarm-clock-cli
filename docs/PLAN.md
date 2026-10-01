@@ -1,6 +1,8 @@
 # Alarm Clock CLI — Requirements, Design & Plan
 
-Written *before* implementation. Time box: ~30 minutes.
+Written *before* implementation. Time box: ~30 minutes. Sections 1–5 are the original
+plan, kept unedited; [section 6](#6-revisions-after-testing-added-after-implementation)
+records what testing and feedback changed, and why.
 
 ## 1. Problem definition
 
@@ -113,7 +115,7 @@ edge cases) are covered by fast deterministic tests with a fake clock.
 The plan above is kept as written. These are the places where reality disagreed with it.
 
 - **Decision 4 was wrong.** "Alarms that already passed when `run` starts do not fire"
-  turned out to mean: set `--in 30s`, start the clock 5 seconds late, and the alarm
+  turned out to mean: set an alarm 30 seconds out, start the clock 5 seconds late, and the alarm
   *silently expires*. That breaks the core requirement (no silent misses).
   *Revised:* at startup, one-time alarms that are still on (so never answered) are
   caught up: they ring if within grace, otherwise they are reported missed and turned
@@ -132,5 +134,11 @@ The plan above is kept as written. These are the places where reality disagreed 
   values as defaults. All times are shown in 12-hour AM/PM. "7:30" is never guessed:
   like a phone's AM/PM switch, it asks. Fewer ways to do a thing means fewer ways to
   get it wrong, and a cleaner demo.
+- **Sound moved into scope.** The plan cut real audio as "platform-specific". In
+  practice many terminals mute the bell, so the alarm could be effectively silent,
+  which breaks the core requirement. Real sound now comes from each OS's built-in
+  player (still no dependencies), and the bell remains the fallback.
+- **`alarm delete all`** was added on request. Because it is destructive, it asks
+  first, and anything other than "yes" deletes nothing.
 - **Ids are never reused**, and the alarm file is **validated on load**. Both came
   from the code review.

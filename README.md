@@ -26,9 +26,11 @@ $ alarm set
    Remember: run `alarm start` and leave it open, or it can't ring!
 ```
 
-Built as a 30-minute exercise, then hardened through manual testing, usability feedback
-and a code review. The requirements, design and plan were written **before** coding (see
-[`docs/PLAN.md`](docs/PLAN.md)), and so were the revisions made after testing.
+The first working version (plan, code and 44 tests) came out of the 30-minute time box.
+Each later commit is a separate iteration driven by manual testing, code review or
+usability feedback; see the [engineering log](#engineering-log-what-testing-and-review-caught)
+and the commit history. The requirements, design and plan were written **before** coding
+([`docs/PLAN.md`](docs/PLAN.md)), and how they changed afterwards is recorded there too.
 
 ## Quick start
 
@@ -166,7 +168,7 @@ fails**.
 
 | # | Found by | Problem | Fix |
 |---|---|---|---|
-| 1 | Reading smoke-test output | `--in 25m` said "in 24m" (24m59.4s truncated) | Round up |
+| 1 | Reading smoke-test output | "Rings in" times were rounded down: an alarm 24m59s away showed "24m" | Round up |
 | 2 | Unit test | Fast typing or pasting at the ring prompt was lost: buffered `sys.stdin` plus `select()` | Read the raw fd with our own line buffer |
 | 3 | **Manual testing** | An alarm due a few seconds before `alarm start` began **silently expired**. A design decision in the original plan was wrong | Startup catch-up for unanswered one-time alarms |
 | 4 | **Manual testing** | A `d` typed while snoozed would dismiss the next ring instantly | Throw away typeahead when a ring starts |
@@ -175,8 +177,9 @@ fails**.
 | 7 | **Code review** | A bad value in the alarm file passed loading, then **crashed `alarm start`** | Validate every field on load |
 | 8 | **Code review** | Deleting the newest alarm let the next one **reuse its number** (and inherit its snooze) | Ids are never reused (`next_id` is stored) |
 | 9 | **Code review** | `--ring-timeout` longer than `--grace` made queued alarms count as missed | Rejected with a clear message |
-| 10 | **Usability feedback** | The flag style (`add 07:30 -r weekdays -l ...`), then even one-line English, still felt "developer-friendly". 24-hour times confused people | **One phone-style path**: a question per field, AM/PM everywhere, `alarm edit` reuses the same questions |
+| 10 | **Usability feedback** | The flag style (`add 07:30 -r weekdays -l ...`), then even one-line English, still felt built for developers, not for someone used to a phone's alarm app | **One phone-style path**: a question per field, 12-hour AM/PM everywhere, `alarm edit` reuses the same questions |
 | 11 | **Code review** | The current time was read before the questions, so a slow answer could land a one-time alarm on the wrong day; also a split-second race in the confirmation | Read the clock after answering, once per save |
+| 12 | **Usability feedback** | The terminal beep is muted in many terminals, so an alarm could effectively be silent | Real sound via the OS's own player, falling back to the beep |
 
 ## Limitations and next steps
 
@@ -193,21 +196,31 @@ fails**.
 - **Windows.** Works, but the ring prompt can't time out (no `select()` on console
   handles). The ring-timeout tests are skipped there.
 
-## How AI was used
+## How I used AI
 
-> _Edit this section into your own words. Reviewers explicitly care about it._
+I built this with Claude Code as a pair-programmer. I owned the problem definition,
+the product decisions and the verification. The AI did most of the typing.
 
-- **Requirements and design first.** Claude Code turned the one-line brief into
-  scenarios, scope cuts, design decisions and a plan ([`docs/PLAN.md`](docs/PLAN.md))
-  before any code was written.
-- **Implementation in layers.** Pure logic came first (models, parsing, scheduler), then
-  I/O at the edges, so the risky time logic could be tested deterministically.
-- **Directing the product, not just the code.** After using it myself, I steered the
-  interface twice: from flags to plain English, then to a single phone-style flow with
-  AM/PM, because the target user is someone who has never used a terminal.
-- **Reviewing, not trusting.** Bugs were caught at every stage: reading output, tests,
-  **my own manual testing** (the AI's own design decision 4 was wrong in practice), and
-  explicit senior-level review passes. A meaningless assertion the AI wrote in one
-  test was also caught and rewritten.
-- **Validation.** Every fix has a regression test, each proven to fail without its fix,
-  plus manual end-to-end runs on two Python versions.
+1. **Define before building.** Before any code, I had the AI turn the one-line brief
+   into user scenarios, explicit scope cuts, design decisions and a test strategy
+   ([`docs/PLAN.md`](docs/PLAN.md)). The bar I set was *an alarm that never silently
+   fails*, and I judged every later change against it.
+2. **Direct with constraints.** I fixed the constraints up front: standard library
+   only, a foreground clock (no daemon), and time and I/O injected so tests never sleep.
+   That kept the output small, reviewable and runnable by anyone who clones the repo.
+3. **Verify, don't trust.** I used it the way a real user would, and that caught what
+   the AI's own tests missed. An alarm silently expired because of a decision in its
+   own plan (#3), a stray keystroke could dismiss the next alarm (#4), and the setup
+   steps assumed a command that didn't exist (#5). I then asked for an explicit
+   senior-level review, which found more bugs (#6–#9, #11). Every fix has a regression
+   test, and each test was checked by reverting the fix and watching it fail.
+4. **Steer the product.** The first interface was built for developers (flags). I pushed
+   it to match how a non-technical person sets an alarm on a phone: one question per
+   field (time → AM/PM → repeat → title), 12-hour times, a real alarm sound, and
+   destructive actions that ask first (`delete all`). One path is easier to use, test
+   and support.
+5. **Keep the trail.** The plan and its revisions ([§6](docs/PLAN.md)), the engineering
+   log above and the commit history record each decision and why it changed.
+
+**What I'd do differently:** start from the user's flow, not the data model. That alone
+would have saved two of the three interface iterations.
