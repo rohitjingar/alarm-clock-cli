@@ -1,7 +1,8 @@
-"""Makes noise in the terminal and asks the user to snooze or dismiss.
+"""Rings an alarm: shows it, plays the sound until answered, asks snooze or stop.
 
 Kept deliberately thin and behind a one-method interface (`ring`) so the run
-loop can be tested with a fake, and so a real audio backend can be swapped in.
+loop can be tested with a fake. The noise itself comes from a `sound` object
+(see sound.py), so real audio and the terminal beep are interchangeable.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Optional, TextIO
 
 from .fmt import plural
 from .models import Alarm
+from .sound import TerminalBell
 
 
 class Action(Enum):
@@ -30,14 +32,14 @@ class TerminalRinger:
         self,
         snooze_minutes: int,
         timeout: float = 60.0,
-        bell_interval: float = 1.5,
+        sound=None,
         out: Optional[TextIO] = None,
         inp: Optional[TextIO] = None,
     ):
         self.snooze_minutes = snooze_minutes
         self.timeout = timeout
-        self.bell_interval = bell_interval
         self.out = out or sys.stdout
+        self.sound = sound or TerminalBell(self.out)
         self.inp = inp or sys.stdin
         # We read the raw fd ourselves: select() can't see data already sitting in
         # TextIOWrapper's buffer, so mixing it with inp.readline() loses typeahead.
@@ -51,7 +53,7 @@ class TerminalRinger:
             details += " - snoozed"
         bar = "=" * 52
         self.out.write(
-            f"\n\a{bar}\n  ⏰ ⏰ ⏰   {name}   ⏰ ⏰ ⏰\n  {details}\n{bar}\n"
+            f"\n{bar}\n  ⏰ ⏰ ⏰   {name}   ⏰ ⏰ ⏰\n  {details}\n{bar}\n"
             f"  Press ENTER to snooze for {plural(self.snooze_minutes, 'minute')}.\n"
             "  Type  stop  and press ENTER to turn it off.\n> "
         )
@@ -59,13 +61,13 @@ class TerminalRinger:
 
         self._discard_typeahead()
         stop = threading.Event()
-        bell = threading.Thread(target=self._bell_loop, args=(stop,), daemon=True)
-        bell.start()
+        noise = threading.Thread(target=self._sound_loop, args=(stop,), daemon=True)
+        noise.start()
         try:
             return self._prompt()
         finally:
-            stop.set()
-            bell.join()
+            stop.set()  # silence the instant they answer (or time out)
+            noise.join()
 
     def _discard_typeahead(self) -> None:
         """Keystrokes typed before this ring (e.g. a 'd' typed while snoozed) sit in
@@ -78,10 +80,9 @@ class TerminalRinger:
             if not os.read(fd, 1024):
                 break  # EOF
 
-    def _bell_loop(self, stop: threading.Event) -> None:
-        while not stop.wait(self.bell_interval):
-            self.out.write("\a")
-            self.out.flush()
+    def _sound_loop(self, stop: threading.Event) -> None:
+        while not stop.is_set():
+            self.sound.play(stop)
 
     def _prompt(self) -> Action:
         deadline = time.monotonic() + self.timeout

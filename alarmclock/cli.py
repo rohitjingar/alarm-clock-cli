@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import threading
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Callable, Optional, Sequence, TextIO
@@ -19,6 +20,7 @@ from .fmt import format_when
 from .models import Alarm, AlarmDraft
 from .ringer import TerminalRinger
 from .runner import Runner
+from .sound import TerminalBell, default_sound
 from .store import AlarmStore, StoreError
 from .wizard import Cancelled, Prompter, ask_alarm
 
@@ -33,6 +35,7 @@ CHEAT_SHEET = """\
   alarm off 2      pause alarm number 2   (alarm on 2 turns it back on)
   alarm delete 2   delete alarm number 2
   alarm start      start the clock - leave it open so your alarms can ring!
+  alarm sound      play the alarm sound, to check your volume
 
 When an alarm rings: press ENTER to snooze, or type stop and press ENTER.
 """
@@ -88,6 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--ring-timeout", type=int, default=60, metavar="SECONDS",
                        help="if nobody answers for this long, snooze (default 60)")
 
+    sub.add_parser("sound", help="play the alarm sound, to check your volume")
     sub.add_parser("help", help="show what I can do")
     return p
 
@@ -244,13 +248,28 @@ def cmd_start(args, ctx: Context) -> None:
         # Alarms that come due while another is ringing are checked afterwards;
         # a ring longer than the grace period would make them count as missed.
         raise UsageError("--ring-timeout must be shorter than --grace")
-    ringer = TerminalRinger(snooze_minutes=args.snooze, timeout=args.ring_timeout, out=ctx.out)
+    sound = default_sound(ctx.out)
+    ctx.out.write(f"🔊 Sound: {sound.name}{_BELL_TIP if isinstance(sound, TerminalBell) else ''}\n")
+    ringer = TerminalRinger(snooze_minutes=args.snooze, timeout=args.ring_timeout,
+                            sound=sound, out=ctx.out)
     runner = Runner(ctx.store, ringer, snooze=timedelta(minutes=args.snooze),
                     grace=timedelta(minutes=args.grace), clock=ctx.clock, out=ctx.out)
     try:
         runner.run()
     except KeyboardInterrupt:
         ctx.out.write("\n👋 Alarm clock stopped. Alarms can't ring until you run: alarm start\n")
+
+
+_BELL_TIP = " (can't hear it? turn on your terminal's bell sound)"
+
+
+def cmd_sound(args, ctx: Context) -> None:
+    """Like previewing a ringtone: play the alarm sound once to check the volume."""
+    sound = default_sound(ctx.out)
+    tip = _BELL_TIP if isinstance(sound, TerminalBell) else ""
+    ctx.out.write(f"🔊 Playing the alarm sound: {sound.name}{tip}\n")
+    sound.play(threading.Event())
+    ctx.out.write("   That's how your alarms will sound.\n")
 
 
 COMMANDS = {
@@ -261,6 +280,7 @@ COMMANDS = {
     "on": cmd_on,
     "delete": cmd_delete,
     "start": cmd_start,
+    "sound": cmd_sound,
 }
 
 

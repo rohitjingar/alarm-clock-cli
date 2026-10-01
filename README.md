@@ -59,6 +59,7 @@ There's one easy way to do each thing:
 | Pause / un-pause one | `alarm off 2` / `alarm on 2` |
 | Delete one | `alarm delete 2` |
 | Start the clock | `alarm start` (leave the window open so alarms can ring!) |
+| Check the sound | `alarm sound` (plays the alarm sound once, to check your volume) |
 | Forgot? | `alarm` |
 
 ```text
@@ -68,8 +69,14 @@ $ alarm list
 1  1:29 PM  once                 off     -                                     Demo
 ```
 
-**When an alarm rings:** press **ENTER** to snooze, or type **stop** and press ENTER.
-If nobody answers within a minute it snoozes by itself, up to 3 times.
+**When an alarm rings,** a real alarm sound plays through your speakers and repeats
+until you answer. Press **ENTER** to snooze, or type **stop** and press ENTER. If
+nobody answers within a minute it snoozes by itself, up to 3 times.
+
+**Sound:** macOS plays the built-in *Glass* sound with `afplay`. Linux uses `paplay`/`aplay`
+with the standard alarm-clock sound, and Windows uses `winsound`. No downloads are
+needed. If no player works, it falls back to the terminal beep, so an alarm is never
+silent. `alarm start` tells you which sound it is using.
 
 **Answering the questions:**
 
@@ -103,6 +110,7 @@ Full reasoning is in [`docs/PLAN.md`](docs/PLAN.md).
 | "7:30": morning or evening? | **Never guess.** Like a phone's AM/PM switch, it asks. `19:30`, `07:30` and `7:30pm` are already clear, so they skip the question |
 | Many ways to do one thing confuses people | **One path**: a phone-style question per field, the same flow for `set` and `edit` |
 | The clock moves backwards (NTP) | Reset the window; never re-fire |
+| Many terminals mute their beep, so an "alarm" can be silent | **Real sound** via the OS's own player, looped while ringing and **cut off the instant you answer**. If the player is missing or fails, it falls back to the beep |
 | Nobody answers | Auto-snooze after `--ring-timeout`, at most 3 times, then turn it off |
 | Keys typed between rings | Thrown away when a ring starts, so a stray key can't answer an alarm it wasn't meant for |
 | `alarm start` changes the file while you answer questions | The file is loaded **after** the questions (reload-modify-write), so nothing is overwritten |
@@ -122,7 +130,8 @@ alarmclock/
   timeparse.py  "7:30", "7:30pm", "19:30", "mon wed fri" -> values; AM/PM ambiguity      (pure)
   scheduler.py  window-based due/missed detection, startup catch-up, snooze state        (pure)
   store.py      JSON persistence, validation, atomic writes, ids never reused             (I/O)
-  ringer.py     terminal bell + snooze/stop prompt with timeout                           (I/O, swappable)
+  ringer.py     shows the alarm, loops the sound, snooze/stop prompt with timeout         (I/O, swappable)
+  sound.py      the noise: afplay / paplay / aplay / winsound, falling back to the beep   (I/O, swappable)
   runner.py     the `alarm start` loop: store -> scheduler -> ringer
   fmt.py        12-hour times ("7:30 AM") and "in 9 hours 3 minutes"
 ```
@@ -137,7 +146,7 @@ one save path. Input and output are passed in, so the question flow is tested by
 python3 -m unittest discover -s tests -t . -v
 ```
 
-There are **67 tests**, using only the standard library. They pass on Python 3.9.6
+There are **75 tests**, using only the standard library. They pass on Python 3.9.6
 (macOS system Python) and 3.14. They cover:
 
 - the question flow (every repeat option, AM/PM, 12 o'clock, wrong answers asked
@@ -146,6 +155,7 @@ There are **67 tests**, using only the standard library. They pass on Python 3.9
 - every scheduler edge case in the table above
 - the run loop on a fake clock
 - the real `select()`-based ring prompt over an OS pipe
+- sound: player choice per OS, cut-off on answer, fallback to the beep
 - every command's messages and exit codes
 
 Each regression test was checked by **temporarily undoing its fix and confirming the test
@@ -171,8 +181,8 @@ fails**.
 
 - **Foreground only.** `alarm start` must stay open (a terminal or tmux). Next step: a
   `launchd`/`systemd` service.
-- **Terminal bell only.** `Ringer` is an interface, so an audio backend
-  (`afplay`/`paplay`/`winsound`) can be added.
+- **One alarm sound.** Next step: a "Sound" question in `alarm set`, like choosing a
+  ringtone on a phone (the `sound` module already supports any file).
 - **Snoozes live in memory.** Quitting `alarm start` while an alarm is snoozed loses the
   snooze, but a one-time alarm is caught up on the next start.
 - **Naive local time.** It works like a bedside clock: no time-zone travel handling, and

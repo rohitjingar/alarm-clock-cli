@@ -164,8 +164,24 @@ class RunnerTest(TempStoreMixin, unittest.TestCase):
         self.assertIn("using last known alarms", runner.out.getvalue())
 
 
+class CountingSound:
+    """Stands in for real audio: counts plays, and stops when told to."""
+
+    name = "test sound"
+
+    def __init__(self):
+        self.plays = 0
+
+    def play(self, stop):
+        self.plays += 1
+        stop.wait(0.02)
+
+
 class TerminalRingerTest(unittest.TestCase):
     """Uses a real pipe so the select()-based prompt is exercised for real."""
+
+    def setUp(self):
+        self.sound = CountingSound()
 
     def ring_with_input(self, text, timeout=2.0, typed_before=""):
         """Ring, with `typed_before` already queued and `text` typed once it rings."""
@@ -183,7 +199,7 @@ class TerminalRingerTest(unittest.TestCase):
 
             threading.Thread(target=user_types, daemon=True).start()
             out = io.StringIO()
-            ringer = TerminalRinger(5, timeout=timeout, bell_interval=0.05, out=out, inp=inp)
+            ringer = TerminalRinger(5, timeout=timeout, sound=self.sound, out=out, inp=inp)
             return ringer.ring(Alarm(1, "07:00:00", "Wake")), out.getvalue()
 
     @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
@@ -196,12 +212,13 @@ class TerminalRingerTest(unittest.TestCase):
         self.assertIn("Alarm #1", out)
         self.assertIn("WAKE", out)
         self.assertEqual(self.ring_with_input("stop\n")[0], Action.DISMISS)
+        self.assertGreater(self.sound.plays, 0, "the alarm sound should play while ringing")
 
     @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
     def test_timeout_when_no_answer(self):
         r, w = os.pipe()
         with os.fdopen(r) as inp, os.fdopen(w, "w"):
-            ringer = TerminalRinger(5, timeout=0.2, bell_interval=0.05, out=io.StringIO(), inp=inp)
+            ringer = TerminalRinger(5, timeout=0.2, sound=self.sound, out=io.StringIO(), inp=inp)
             self.assertEqual(ringer.ring(Alarm(1, "07:00:00")), Action.TIMEOUT)
 
     @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
