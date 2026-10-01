@@ -105,3 +105,27 @@ edge cases) are covered by fast deterministic tests with a fake clock.
 - Unit tests for every edge case listed in §2 (fake clock, no sleeping).
 - CLI tests against a temp `ALARMCLOCK_FILE`.
 - Manual end-to-end run in a real terminal (recorded).
+
+---
+
+## 6. Revisions after testing (added after implementation)
+
+The plan above is kept as written. These are the places where reality disagreed with it.
+
+- **Decision 4 was wrong.** "Alarms that already passed when `run` starts do not fire"
+  turned out to mean: set `--in 30s`, start the clock 5 seconds late, and the alarm
+  *silently expires*. That breaks the core requirement (no silent misses).
+  *Revised:* at startup, one-time alarms that are still on (so never answered) are
+  caught up: they ring if within grace, otherwise they are reported missed and turned
+  off. Recurring alarms are still not caught up, because without per-occurrence history
+  a restart could re-ring one the user already stopped.
+- **Decision 1 needed refining.** In a window that contains several occurrences (a
+  long sleep), the *latest* one decides: it may still be within grace.
+- **Decision 8 (ringing UX).** Keys typed before a ring are discarded, so a stray
+  keystroke can't answer an alarm.
+- **CLI language.** Usability feedback from a non-technical user: the flag-style CLI read
+  as "developer-friendly". The interface is now plain English (`alarm set 7:30 wake
+  up every weekday`, `alarm in 10 minutes`, `alarm off 2`, `alarm start`; ENTER to
+  snooze, type `stop` to stop), with friendly errors. Old flags remain as aliases.
+- **Ids are never reused**, and the alarm file is **validated on load**. Both came
+  from the code review.
