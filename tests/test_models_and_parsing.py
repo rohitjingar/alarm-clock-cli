@@ -1,46 +1,36 @@
 import unittest
 from datetime import datetime, time, timedelta
 
-from alarmclock.fmt import format_delta
+from alarmclock.fmt import format_clock, format_delta
 from alarmclock.models import Alarm
-from alarmclock.timeparse import parse_duration, parse_repeat, parse_time
+from alarmclock.timeparse import AmbiguousTime, parse_repeat, parse_time
 
 THU_NOON = datetime(2026, 10, 1, 12, 0)  # a Thursday
 
 
 class ParseTimeTest(unittest.TestCase):
-    def test_valid_formats(self):
+    def test_unambiguous_formats(self):
         cases = {
-            "07:30": time(7, 30), "7:30": time(7, 30), "19:05": time(19, 5),
             "7:30am": time(7, 30), "7:30 PM": time(19, 30), "7pm": time(19, 0),
-            "12am": time(0, 0), "12pm": time(12, 0), "00:00": time(0, 0),
-            "23:59:30": time(23, 59, 30), "7:30 am": time(7, 30), "7.30": time(7, 30),
-            "6 p.m.": time(18, 0),
+            "6 p.m.": time(18, 0), "7.30pm": time(19, 30), "12am": time(0, 0),
+            "12pm": time(12, 0), "12:30 am": time(0, 30),
+            "19:05": time(19, 5), "00:00": time(0, 0), "07:30": time(7, 30),
+            "23:59:30": time(23, 59, 30),
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(parse_time(text), expected)
 
+    def test_needs_am_or_pm_like_a_phone(self):
+        for text in ["7:30", "7", "12:00", "11:59", "1"]:
+            with self.subTest(text=text), self.assertRaises(AmbiguousTime) as ctx:
+                parse_time(text)
+            self.assertIn("AM or PM", str(ctx.exception))
+
     def test_invalid_formats(self):
-        for text in ["", "7", "24:00", "12:60", "13pm", "0am", "7:5", "noon", "-1:00"]:
+        for text in ["", "24:00", "12:60", "13pm", "0am", "7:5", "noon", "-1:00"]:
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_time(text)
-
-
-class ParseDurationTest(unittest.TestCase):
-    def test_valid(self):
-        self.assertEqual(parse_duration("25m"), timedelta(minutes=25))
-        self.assertEqual(parse_duration("1h30m"), timedelta(hours=1, minutes=30))
-        self.assertEqual(parse_duration("45s"), timedelta(seconds=45))
-        self.assertEqual(parse_duration("10"), timedelta(minutes=10))
-        self.assertEqual(parse_duration("10 minutes"), timedelta(minutes=10))
-        self.assertEqual(parse_duration("1 hour and 30 minutes"), timedelta(hours=1, minutes=30))
-        self.assertEqual(parse_duration("1 min 5 secs"), timedelta(seconds=65))
-
-    def test_invalid(self):
-        for text in ["", "0m", "abc", "1d", "m", "ten minutes", "10 parsecs", "5m 3"]:
-            with self.subTest(text=text), self.assertRaises(ValueError):
-                parse_duration(text)
 
 
 class ParseRepeatTest(unittest.TestCase):
@@ -89,6 +79,16 @@ class NextTriggerTest(unittest.TestCase):
     def test_roundtrip_dict(self):
         a = Alarm(id=3, time="06:45:00", label="Gym", days=[1, 3], enabled=False)
         self.assertEqual(Alarm.from_dict(a.to_dict()), a)
+
+
+class FormatClockTest(unittest.TestCase):
+    def test_twelve_hour_with_am_pm(self):
+        self.assertEqual(format_clock(time(7, 30)), "7:30 AM")
+        self.assertEqual(format_clock(time(19, 5)), "7:05 PM")
+        self.assertEqual(format_clock(time(0, 0)), "12:00 AM")
+        self.assertEqual(format_clock(time(12, 0)), "12:00 PM")
+        self.assertEqual(format_clock(time(13, 19, 39)), "1:19:39 PM")
+        self.assertEqual(Alarm(1, "18:45:00", days=[0]).display_time(), "6:45 PM")
 
 
 class FormatDeltaTest(unittest.TestCase):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 
 def plural(n: int, word: str) -> str:
@@ -30,7 +30,15 @@ def format_delta(delta: timedelta) -> str:
     return " ".join(plural(n, w) for n, w in parts if n)
 
 
+def format_clock(t: time) -> str:
+    """12-hour clock, like a phone: '7:30 AM', '12:05 PM', '12:00 AM', '1:19:39 PM'.
+
+    Built by hand rather than with %p, whose text depends on the system locale.
+    """
+    seconds = f":{t.second:02d}" if t.second else ""
+    return f"{t.hour % 12 or 12}:{t.minute:02d}{seconds} {'AM' if t.hour < 12 else 'PM'}"
+
+
 def format_when(when: datetime, now: datetime) -> str:
-    """'Fri 07:30 (in 9 hours 3 minutes)'."""
-    clock = when.strftime("%H:%M:%S" if when.second else "%H:%M")
-    return f"{when.strftime('%a')} {clock} (in {format_delta(when - now)})"
+    """'Fri 7:30 AM (in 9 hours 3 minutes)'."""
+    return f"{when:%a} {format_clock(when.time())} (in {format_delta(when - now)})"

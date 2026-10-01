@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Callable, Optional, TextIO
 
-from .fmt import format_delta, format_when
+from .fmt import format_clock, format_delta, format_when
 from .models import Alarm
 from .ringer import Action
 from .scheduler import EventKind, Scheduler
@@ -70,7 +70,7 @@ class Runner:
                 name = f' "{event.alarm.label}"' if event.alarm.label else ""
                 self.say(
                     f"⚠️  Missed alarm #{event.alarm.id}{name}: it was due "
-                    f"{event.scheduled:%a %H:%M}, {late} ago, while the alarm clock "
+                    f"{event.scheduled:%a} {format_clock(event.scheduled.time())}, {late} ago, while the alarm clock "
                     "wasn't running or the computer was asleep."
                 )
                 self._finish(event.alarm)
@@ -100,7 +100,7 @@ class Runner:
         if action is Action.SNOOZE:
             until = self.clock() + self.snooze
             self.scheduler.snooze(alarm.id, until)
-            self.say(f"😴 Snoozing. I'll ring again at {until:%H:%M:%S}.")
+            self.say(f"😴 Snoozing. I'll ring again at {format_clock(until.time())}.")
         else:
             self.say("✅ Alarm stopped.")
             self._finish(alarm)
@@ -141,7 +141,7 @@ class Runner:
                 if when is not None and when > now:
                     upcoming.append((when, a))
         if not upcoming:
-            self.say("No alarms coming up. Add one in another window, e.g.: alarm set 7:30")
+            self.say("No alarms coming up. Set one in another window with: alarm set")
             return
         when, alarm = min(upcoming, key=lambda x: x[0])
         name = f' "{alarm.label}"' if alarm.label else ""

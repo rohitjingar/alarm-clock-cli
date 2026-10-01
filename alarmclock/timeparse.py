@@ -1,16 +1,24 @@
-"""Parsing of what the user types: times, durations and repeat rules.
+"""Parsing of what the user types: times and days.
 
-Forgiving about format ("7:30 am", "10 minutes", "every monday and friday"),
-strict about ambiguity ("7" -- morning or evening?). Every function raises
-ValueError with a message written for a non-technical user.
+Forgiving about format ("7:30 am", "7.30pm", "mon wed fri"),
+strict about ambiguity: like a phone, "7:30" needs an AM or PM. Every function
+raises ValueError with a message written for a non-technical user.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import time, timedelta
+from datetime import time
 
 from .models import DAILY, WEEKDAYS, WEEKENDS
+
+class AmbiguousTime(ValueError):
+    """'7:30' could be AM or PM. Carries the text so an interactive caller can ask."""
+
+    def __init__(self, text: str):
+        self.text = text.strip()
+        super().__init__(f"Is {self.text} AM or PM? Say {self.text}am or {self.text}pm.")
+
 
 _TIME_RE = re.compile(
     r"^(?P<h>\d{1,2})(?:[:.](?P<m>\d{2})(?:[:.](?P<s>\d{2}))?)?\s*(?P<ampm>[ap]\.?m\.?)?$",
@@ -19,7 +27,11 @@ _TIME_RE = re.compile(
 
 
 def parse_time(text: str) -> time:
-    """Parse '07:30', '7:30am', '7:30 pm', '7pm', '19:05', '7.30', '23:59:30'."""
+    """Parse '7:30am', '7:30 pm', '7pm', '19:05', '07:30', '7.30pm', '23:59:30'.
+
+    Hours 1-12 without AM/PM raise AmbiguousTime -- unless written with a leading
+    zero ('07:30'), the 24-hour convention. Hours 0 and 13-23 are never ambiguous.
+    """
     m = _TIME_RE.match(text.strip())
     if not m:
         raise ValueError(f"I don't understand the time {text!r}. Try 7:30, 7:30am or 19:05.")
@@ -29,11 +41,8 @@ def parse_time(text: str) -> time:
         f"{text!r} isn't a time on a clock. Try something like 7:30 or 19:05."
     )
 
-    if not ampm and m["m"] is None:
-        # A bare "7" is ambiguous -- refuse rather than guess.
-        if 1 <= hour <= 12:
-            raise ValueError(f"Is {text!r} morning or evening? Say {hour}am or {hour}pm.")
-        raise ValueError(f"Did you mean {hour:02d}:00? Please write it like that.")
+    if not ampm and 1 <= hour <= 12 and not m["h"].startswith("0"):
+        raise AmbiguousTime(text)  # refuse to guess, like a phone's AM/PM switch
     if ampm:
         if not 1 <= hour <= 12:
             raise not_a_time
@@ -41,37 +50,6 @@ def parse_time(text: str) -> time:
     if hour > 23 or minute > 59 or second > 59:
         raise not_a_time
     return time(hour, minute, second)
-
-
-_UNIT_SECONDS = {}
-for _names, _secs in (
-    (("s", "sec", "secs", "second", "seconds"), 1),
-    (("m", "min", "mins", "minute", "minutes"), 60),
-    (("h", "hr", "hrs", "hour", "hours"), 3600),
-):
-    _UNIT_SECONDS.update(dict.fromkeys(_names, _secs))
-
-
-def parse_duration(text: str) -> timedelta:
-    """Parse '25m', '10 minutes', '1h30m', '1 hour and 30 minutes', '45s'.
-    A bare number means minutes."""
-    raw = text.strip().lower()
-    if raw.isdigit():
-        raw += "m"
-    tokens = [t for t in re.findall(r"\d+|[a-z]+|\S", raw) if t not in ("and", ",")]
-    bad = ValueError(
-        f"I don't understand how long {text!r} is. Try 10 minutes, 1 hour or 30 seconds."
-    )
-    if not tokens or len(tokens) % 2:
-        raise bad
-    total = 0
-    for number, unit in zip(tokens[::2], tokens[1::2]):
-        if not number.isdigit() or unit not in _UNIT_SECONDS:
-            raise bad
-        total += int(number) * _UNIT_SECONDS[unit]
-    if total <= 0:
-        raise ValueError("That's no time at all! Pick something more than zero.")
-    return timedelta(seconds=total)
 
 
 _FULL_DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday",

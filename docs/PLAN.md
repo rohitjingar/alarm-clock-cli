@@ -123,9 +123,14 @@ The plan above is kept as written. These are the places where reality disagreed 
   long sleep), the *latest* one decides: it may still be within grace.
 - **Decision 8 (ringing UX).** Keys typed before a ring are discarded, so a stray
   keystroke can't answer an alarm.
-- **CLI language.** Usability feedback from a non-technical user: the flag-style CLI read
-  as "developer-friendly". The interface is now plain English (`alarm set 7:30 wake
-  up every weekday`, `alarm in 10 minutes`, `alarm off 2`, `alarm start`; ENTER to
-  snooze, type `stop` to stop), with friendly errors. Old flags remain as aliases.
+- **CLI language (two iterations).** Usability feedback from a non-technical user:
+  the flag-style CLI read as "developer-friendly". A one-line plain-English version
+  (`alarm set 7:30 wake up every weekday`) was the first fix. Then came the final
+  decision: **one path only, modelled on a phone's alarm app**. `alarm set` asks one
+  question per field (time, AM or PM, repeat: once / every day / weekdays / weekends /
+  choose days, then title), and `alarm edit N` reuses the same questions with current
+  values as defaults. All times are shown in 12-hour AM/PM. "7:30" is never guessed:
+  like a phone's AM/PM switch, it asks. Fewer ways to do a thing means fewer ways to
+  get it wrong, and a cleaner demo.
 - **Ids are never reused**, and the alarm file is **validated on load**. Both came
   from the code review.

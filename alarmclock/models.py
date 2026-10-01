@@ -6,10 +6,21 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+from .fmt import format_clock
+
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 WEEKDAYS = [0, 1, 2, 3, 4]
 WEEKENDS = [5, 6]
 DAILY = list(range(7))
+
+
+@dataclass
+class AlarmDraft:
+    """The fields a person sets, phone-style, before it becomes a saved Alarm."""
+
+    clock: time
+    days: list[int]  # empty = only once
+    label: str = ""
 
 
 @dataclass
@@ -70,8 +81,7 @@ class Alarm:
         return "every " + ", ".join(DAY_NAMES[d] for d in days)
 
     def display_time(self) -> str:
-        t = self.clock_time
-        return t.strftime("%H:%M:%S" if t.second else "%H:%M")
+        return format_clock(self.clock_time)
 
     def to_dict(self) -> dict:
         return asdict(self)
