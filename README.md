@@ -12,7 +12,7 @@ plan were written **before** coding: see [`docs/PLAN.md`](docs/PLAN.md).
 Requires Python 3.9+. No third-party packages, not even for tests.
 
 ```bash
-git clone <this repo> && cd alarm-clock
+git clone https://github.com/rohitjingar/alarm-clock-cli.git && cd alarm-clock-cli
 python3 -m alarmclock add --in 1m -l "Try me"   # or: pip install . && alarm ...
 python3 -m alarmclock run                        # leave running; it rings in 1 minute
 ```
