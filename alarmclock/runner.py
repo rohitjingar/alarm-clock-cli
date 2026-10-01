@@ -1,4 +1,4 @@
-"""The `alarm run` loop: poll the store, tick the scheduler, ring, react.
+"""The `alarm start` loop: poll the store, tick the scheduler, ring, react.
 
 Clock, sleep, output and the ringer are injected so the whole loop runs in
 tests against a fake clock without real waiting or real input.
@@ -49,23 +49,29 @@ class Runner:
 
     def run(self, keep_running: Callable[[], bool] = lambda: True) -> None:
         self._reload()
-        enabled = sum(a.enabled for a in self.alarms)
-        self.say(f"Alarm clock running with {enabled} enabled alarm(s). Ctrl+C to stop.")
-        self._announce_next()
+        self.say("⏰ The alarm clock is running. Leave this window open so your alarms "
+                 "can ring.\n   (To quit, press Ctrl+C.)")
+        # Tick once before announcing: an alarm that came due just before we started
+        # rings now, instead of after a misleading "no upcoming alarms".
+        if not self.step():
+            self._announce_next()
         while keep_running():
-            self.step()
             self.sleep(1.0)
+            self.step()
 
-    def step(self) -> None:
+    def step(self) -> bool:
+        """One tick. Returns True if anything rang or was reported missed."""
         now = self.clock()
-        self._reload()  # picks up `alarm add/remove` from other terminals live
+        self._reload()  # picks up `alarm set/delete` from other windows live
         events = self.scheduler.tick(self.alarms, now)
         for event in events:
             if event.kind is EventKind.MISSED:
                 late = format_delta(now - event.scheduled)
+                name = f' "{event.alarm.label}"' if event.alarm.label else ""
                 self.say(
-                    f"Missed alarm #{event.alarm.id} {event.alarm.label!r} "
-                    f"(due {event.scheduled:%a %H:%M}, {late} ago; beyond grace period)."
+                    f"⚠️  Missed alarm #{event.alarm.id}{name}: it was due "
+                    f"{event.scheduled:%a %H:%M}, {late} ago, while the alarm clock "
+                    "wasn't running or the computer was asleep."
                 )
                 self._finish(event.alarm)
             else:
@@ -73,6 +79,7 @@ class Runner:
         if events:
             self._reload()
             self._announce_next()
+        return bool(events)
 
     def _ring(self, alarm: Alarm, snoozed: bool) -> None:
         action = self.ringer.ring(alarm, snoozed)
@@ -80,10 +87,12 @@ class Runner:
             count = self._unanswered.get(alarm.id, 0) + 1
             self._unanswered[alarm.id] = count
             if count <= self.max_unanswered:
-                self.say(f"No answer, auto-snoozing ({count}/{self.max_unanswered}).")
+                self.say(f"Nobody answered, so I'll try again soon "
+                         f"({count} of {self.max_unanswered}).")
                 action = Action.SNOOZE
             else:
-                self.say(f"No answer after {self.max_unanswered} snoozes, giving up.")
+                self.say(f"No answer after {self.max_unanswered} tries, "
+                         "so I'm turning this alarm off.")
                 action = Action.DISMISS
         elif action is Action.SNOOZE:
             self._unanswered.pop(alarm.id, None)
@@ -91,9 +100,9 @@ class Runner:
         if action is Action.SNOOZE:
             until = self.clock() + self.snooze
             self.scheduler.snooze(alarm.id, until)
-            self.say(f"Snoozed until {until:%H:%M:%S}.")
+            self.say(f"😴 Snoozing. I'll ring again at {until:%H:%M:%S}.")
         else:
-            self.say("Dismissed.")
+            self.say("✅ Alarm stopped.")
             self._finish(alarm)
 
     def _finish(self, alarm: Alarm) -> None:
@@ -132,8 +141,8 @@ class Runner:
                 if when is not None and when > now:
                     upcoming.append((when, a))
         if not upcoming:
-            self.say("No upcoming alarms. Add one from another terminal: alarm add 07:30")
+            self.say("No alarms coming up. Add one in another window, e.g.: alarm set 7:30")
             return
         when, alarm = min(upcoming, key=lambda x: x[0])
-        label = f" {alarm.label!r}" if alarm.label else ""
-        self.say(f"Next: #{alarm.id}{label} {format_when(when, now)}")
+        name = f' "{alarm.label}"' if alarm.label else ""
+        self.say(f"Next alarm: #{alarm.id}{name} {format_when(when, now)}")

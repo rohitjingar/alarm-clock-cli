@@ -1,6 +1,10 @@
+import contextlib
 import io
+import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,8 +48,30 @@ class StoreTest(TempStoreMixin, unittest.TestCase):
         self.assertEqual(os.listdir(self._tmp.name), ["alarms.json"])
 
     def test_next_id(self):
-        self.assertEqual(AlarmStore.next_id([]), 1)
-        self.assertEqual(AlarmStore.next_id([Alarm(4, "07:00:00"), Alarm(2, "07:00:00")]), 5)
+        self.assertEqual(self.store.next_id([]), 1)
+        self.assertEqual(self.store.next_id([Alarm(4, "07:00:00"), Alarm(2, "07:00:00")]), 5)
+
+    def test_ids_are_never_reused_after_delete(self):
+        # Regression (senior review): deleting the newest alarm used to hand its
+        # number to the next new alarm.
+        self.store.save([Alarm(1, "07:00:00", days=[0]), Alarm(2, "08:00:00", days=[0])])
+        self.store.update(lambda alarms: alarms.pop())  # delete #2
+        fresh = AlarmStore(self.path)  # a later, separate `alarm set`
+        self.assertEqual(fresh.next_id(fresh.load()), 3)
+
+    def test_invalid_fields_are_rejected_at_load(self):
+        # Regression (senior review): a bad time passed load() and crashed `alarm start`.
+        bad_alarms = [
+            {"id": 1, "time": "25:00:00", "days": [0]},
+            {"id": 1, "time": "07:00:00", "days": [9]},
+            {"id": 1, "time": "07:00:00", "days": []},
+            {"id": 1, "time": "07:00:00", "date": "2026-13-01"},
+        ]
+        for bad in bad_alarms:
+            with self.subTest(bad=bad):
+                self.path.write_text(json.dumps({"version": 1, "alarms": [bad]}))
+                with self.assertRaises(StoreError):
+                    self.store.load()
 
 
 class FakeClock:
@@ -113,7 +139,15 @@ class RunnerTest(TempStoreMixin, unittest.TestCase):
         self.run_for(runner, 30 * 60)
         self.assertEqual(len(ringer.rang), 3)  # original + 2 auto-snoozes
         self.assertFalse(self.store.load()[0].enabled)
-        self.assertIn("giving up", runner.out.getvalue())
+        self.assertIn("No answer after 2 tries", runner.out.getvalue())
+
+    def test_alarm_that_expired_while_not_running_is_reported_and_disabled(self):
+        self.store.save([Alarm(1, "06:00:00", "Early", date="2026-10-01")])
+        runner, ringer, _ = self.make_runner([])
+        self.run_for(runner, 3)
+        self.assertEqual(ringer.rang, [])
+        self.assertIn("Missed alarm #1", runner.out.getvalue())
+        self.assertFalse(self.store.load()[0].enabled)
 
     def test_picks_up_alarm_added_while_running(self):
         runner, ringer, clock = self.make_runner([Action.DISMISS])
@@ -135,13 +169,21 @@ class RunnerTest(TempStoreMixin, unittest.TestCase):
 class TerminalRingerTest(unittest.TestCase):
     """Uses a real pipe so the select()-based prompt is exercised for real."""
 
-    def ring_with_input(self, text, timeout=2.0):
+    def ring_with_input(self, text, timeout=2.0, typed_before=""):
+        """Ring, with `typed_before` already queued and `text` typed once it rings."""
         r, w = os.pipe()
         with os.fdopen(r) as inp, os.fdopen(w, "w") as wr:
-            wr.write(text)
+            wr.write(typed_before)
             wr.flush()
-            if text == "":
-                wr.close()
+
+            def user_types():
+                time.sleep(0.1)  # a human answers after the alarm starts ringing
+                wr.write(text)
+                wr.flush()
+                if text == "":
+                    wr.close()
+
+            threading.Thread(target=user_types, daemon=True).start()
             out = io.StringIO()
             ringer = TerminalRinger(5, timeout=timeout, bell_interval=0.05, out=out, inp=inp)
             return ringer.ring(Alarm(1, "07:00:00", "Wake")), out.getvalue()
@@ -152,8 +194,10 @@ class TerminalRingerTest(unittest.TestCase):
         self.assertEqual(self.ring_with_input("\n")[0], Action.SNOOZE)
         action, out = self.ring_with_input("huh\ns\n")
         self.assertEqual(action, Action.SNOOZE)
-        self.assertIn("type 's' to snooze", out)
-        self.assertIn("ALARM #1", out)
+        self.assertIn("Press ENTER to snooze, or type stop", out)
+        self.assertIn("Alarm #1", out)
+        self.assertIn("WAKE", out)
+        self.assertEqual(self.ring_with_input("stop\n")[0], Action.DISMISS)
 
     @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
     def test_timeout_when_no_answer(self):
@@ -164,10 +208,110 @@ class TerminalRingerTest(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
     def test_closed_stdin_times_out_instead_of_spinning(self):
-        self.assertEqual(self.ring_with_input("", timeout=0.2)[0], Action.TIMEOUT)
+        self.assertEqual(self.ring_with_input("", timeout=0.3)[0], Action.TIMEOUT)
+
+    @unittest.skipIf(os.name == "nt", "select() on pipes is POSIX-only")
+    def test_keys_typed_before_the_ring_are_ignored(self):
+        # Regression: a 'd' typed while snoozed used to dismiss the next ring instantly.
+        action, _ = self.ring_with_input("s\n", typed_before="d\n")
+        self.assertEqual(action, Action.SNOOZE)
+
+
+class PlainEnglishCliTest(TempStoreMixin, unittest.TestCase):
+    """The everyday command style: `alarm set 7:30 wake up every weekday`."""
+
+    def cli(self, *argv, now=NOW):
+        out, err = io.StringIO(), io.StringIO()
+        code = main(list(argv), store=self.store, clock=lambda: now, out=out, err=err)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_set_with_name_and_repeat(self):
+        code, out, _ = self.cli("set", "7:30", "wake", "up", "every", "weekday")
+        self.assertEqual(code, EXIT_OK)
+        a = self.store.load()[0]
+        self.assertEqual((a.time, a.label, a.days), ("07:30:00", "wake up", [0, 1, 2, 3, 4]))
+        self.assertIn('Alarm 1 "wake up" set for 07:30, every weekday', out)
+
+    def test_set_with_split_am_pm_and_trailing_daily(self):
+        self.cli("set", "6:45", "pm", "dinner", "daily")
+        a = self.store.load()[0]
+        self.assertEqual((a.time, a.label, a.days), ("18:45:00", "dinner", list(range(7))))
+
+    def test_set_quoted_name_one_time(self):
+        self.cli("set", "13:00", "Doctor appointment")
+        a = self.store.load()[0]
+        self.assertEqual((a.label, a.date, a.days), ("Doctor appointment", "2026-10-01", []))
+
+    def test_in_with_words(self):
+        code, out, _ = self.cli("in", "10", "minutes", "tea")
+        self.assertEqual(code, EXIT_OK)
+        a = self.store.load()[0]
+        self.assertEqual((a.time, a.label), ("12:10:00", "tea"))
+        self.assertIn("in 10 minutes", out)
+
+    def test_in_label_starting_with_a_number(self):
+        self.cli("in", "10", "minutes", "2", "eggs")
+        self.assertEqual(self.store.load()[0].label, "2 eggs")
+
+    def test_friendly_errors(self):
+        cases = [
+            (["set"], "What time?"),
+            (["set", "7"], "morning or evening"),
+            (["set", "25:00"], "isn't a time on a clock"),
+            (["set", "7:30", "every"], "Every what?"),
+            (["set", "7:30", "every", "fortnight"], "how often"),
+            (["in", "ten", "minutes"], "how long"),
+            (["in", "0", "minutes"], "no time at all"),
+            (["in", "5", "minutes", "every", "day"], "rings just once"),
+            (["off", "two"], "by their number"),
+            (["delete", "7"], "no alarm number 7"),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                code, _, err = self.cli(*argv)
+                self.assertNotEqual(code, EXIT_OK)
+                self.assertTrue(err.startswith("Oops! "), err)
+                self.assertIn(expected, err)
+        self.assertEqual(self.store.load(), [])
+
+    def test_off_on_delete(self):
+        self.cli("set", "7:00", "every", "day")
+        self.assertIn("Alarm 1 is off", self.cli("off", "1")[1])
+        self.assertFalse(self.store.load()[0].enabled)
+        self.assertIn("Alarm 1 is on", self.cli("on", "#1")[1])
+        self.assertTrue(self.store.load()[0].enabled)
+        self.assertIn("Deleted alarm 1", self.cli("delete", "1")[1])
+        self.assertEqual(self.store.load(), [])
+
+    def test_no_command_and_help_show_examples(self):
+        for argv in ([], ["help"]):
+            code, out, _ = self.cli(*argv)
+            self.assertEqual(code, EXIT_OK)
+            self.assertIn("alarm set 7:30 wake up every weekday", out)
+
+    def test_unknown_or_incomplete_command_is_friendly(self):
+        for argv, expected in ((["fly"], "I don't know the command 'fly'"),
+                               (["off"], "Something is missing")):
+            with self.subTest(argv=argv), \
+                    contextlib.redirect_stderr(io.StringIO()) as err, \
+                    self.assertRaises(SystemExit) as exit_:
+                self.cli(*argv)
+            self.assertEqual(exit_.exception.code, EXIT_USAGE)
+            self.assertIn(expected, err.getvalue())
+            self.assertIn("alarm set 7:30", err.getvalue())
+
+    def test_ring_timeout_must_be_shorter_than_grace(self):
+        code, _, err = self.cli("start", "--grace", "1", "--ring-timeout", "90")
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("shorter than --grace", err)
+
+    def test_empty_list_says_what_to_do(self):
+        self.assertIn("Try: alarm set 7:30", self.cli("list")[1])
 
 
 class CliTest(TempStoreMixin, unittest.TestCase):
+    """The original flag style still works (add -l -r --in, rm, enable, disable)."""
+
     def cli(self, *argv, now=NOW):
         out, err = io.StringIO(), io.StringIO()
         code = main(list(argv), store=self.store, clock=lambda: now, out=out, err=err)
@@ -185,13 +329,13 @@ class CliTest(TempStoreMixin, unittest.TestCase):
         self.assertEqual(code, EXIT_OK)
         a = self.store.load()[0]
         self.assertEqual((a.time, a.date, a.label), ("13:30:00", "2026-10-01", "Tea"))
-        self.assertIn("in 1h 30m", out)
+        self.assertIn("in 1 hour 30 minutes", out)
 
     def test_add_recurring_and_list(self):
         self.cli("add", "7:30am", "-r", "weekdays", "-l", "Wake up")
         code, out, _ = self.cli("list")
         self.assertEqual(code, EXIT_OK)
-        self.assertIn("weekdays", out)
+        self.assertIn("every weekday", out)
         self.assertIn("Fri 07:30", out)
         self.assertIn("Wake up", out)
 
@@ -201,7 +345,7 @@ class CliTest(TempStoreMixin, unittest.TestCase):
             with self.subTest(argv=argv):
                 code, _, err = self.cli(*argv)
                 self.assertEqual(code, EXIT_USAGE)
-                self.assertIn("alarm: error:", err)
+                self.assertTrue(err.startswith("Oops! "), err)
         self.assertEqual(self.store.load(), [])
 
     def test_remove_enable_disable(self):
@@ -232,7 +376,7 @@ class CliTest(TempStoreMixin, unittest.TestCase):
     def test_expired_status_in_list(self):
         self.cli("add", "13:00")
         _, out, _ = self.cli("list", now=datetime(2026, 10, 1, 14, 0))
-        self.assertIn("expired", out)
+        self.assertIn("missed", out)
 
     def test_corrupt_store_is_a_clean_error(self):
         self.path.write_text("nope")

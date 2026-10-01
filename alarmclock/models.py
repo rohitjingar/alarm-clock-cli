@@ -62,12 +62,12 @@ class Alarm:
         if not days:
             return "once"
         if days == DAILY:
-            return "daily"
+            return "every day"
         if days == WEEKDAYS:
-            return "weekdays"
+            return "every weekday"
         if days == WEEKENDS:
-            return "weekends"
-        return ",".join(DAY_NAMES[d] for d in days)
+            return "every weekend"
+        return "every " + ", ".join(DAY_NAMES[d] for d in days)
 
     def display_time(self) -> str:
         t = self.clock_time
@@ -78,7 +78,9 @@ class Alarm:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Alarm":
-        return cls(
+        """Build and validate. Raises ValueError/TypeError/KeyError on bad data, so a
+        hand-edited file fails when loaded instead of crashing `alarm start` later."""
+        alarm = cls(
             id=int(data["id"]),
             time=str(data["time"]),
             label=str(data.get("label", "")),
@@ -86,3 +88,11 @@ class Alarm:
             date=data.get("date"),
             enabled=bool(data.get("enabled", True)),
         )
+        alarm.clock_time  # noqa: B018 -- raises ValueError if the time is invalid
+        if any(not 0 <= d <= 6 for d in alarm.days):
+            raise ValueError(f"alarm {alarm.id}: days must be 0-6")
+        if not alarm.days:
+            if alarm.date is None:
+                raise ValueError(f"alarm {alarm.id}: a one-time alarm needs a date")
+            date.fromisoformat(alarm.date)
+        return alarm

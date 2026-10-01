@@ -38,10 +38,40 @@ class SchedulerTest(unittest.TestCase):
         events = sched.tick([daily()], T0 + timedelta(hours=2))  # laptop slept
         self.assertEqual([e.kind for e in events], [EventKind.MISSED])
 
-    def test_alarm_already_past_at_startup_does_not_fire(self):
+    def test_recurring_alarm_past_at_startup_is_not_rerung(self):
+        # Can't tell if it was dismissed before a restart, so don't ring it again.
         start = datetime(2026, 10, 1, 7, 0, 30)
         sched = Scheduler(start)
         self.assertEqual(ticks(sched, [daily()], start, 60), [])
+
+    def test_one_time_alarm_just_before_startup_still_rings(self):
+        # Regression (found in manual testing): `alarm add --in 30s`, then starting
+        # `run` a few seconds too late, used to let the alarm expire silently.
+        start = datetime(2026, 10, 1, 7, 0, 20)
+        sched = Scheduler(start)
+        alarms = [Alarm(id=1, time="07:00:00", date="2026-10-01")]
+        events = ticks(sched, alarms, start, 5)
+        self.assertEqual([e.kind for e in events], [EventKind.RING])
+
+    def test_one_time_alarm_long_before_startup_is_reported_missed(self):
+        start = datetime(2026, 10, 1, 9, 0)
+        sched = Scheduler(start)
+        alarms = [Alarm(id=1, time="07:00:00", date="2026-10-01")]
+        self.assertEqual([e.kind for e in ticks(sched, alarms, start, 5)], [EventKind.MISSED])
+
+    def test_future_one_time_alarm_not_caught_up_early(self):
+        sched = Scheduler(T0)
+        alarms = [Alarm(id=1, time="08:00:00", date="2026-10-01")]
+        self.assertEqual(ticks(sched, alarms, T0, 5), [])
+
+    def test_long_sleep_rings_latest_occurrence_if_within_grace(self):
+        # Regression (senior review): Mon 08:00 -> Wed 07:02 used to report Tuesday's
+        # 07:00 as missed and never ring Wednesday's, which is only 2 minutes late.
+        mon = datetime(2026, 9, 28, 8, 0)
+        sched = Scheduler(mon)
+        events = sched.tick([daily()], datetime(2026, 9, 30, 7, 2))
+        self.assertEqual([e.kind for e in events], [EventKind.RING])
+        self.assertEqual(events[0].scheduled, datetime(2026, 9, 30, 7, 0))
 
     def test_clock_going_backwards_does_not_refire(self):
         sched = Scheduler(T0)

@@ -15,6 +15,7 @@ import time
 from enum import Enum
 from typing import Optional, TextIO
 
+from .fmt import plural
 from .models import Alarm
 
 
@@ -44,19 +45,19 @@ class TerminalRinger:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
     def ring(self, alarm: Alarm, snoozed: bool = False) -> Action:
-        title = f"ALARM #{alarm.id}  {alarm.display_time()}"
-        if alarm.label:
-            title += f"  -  {alarm.label}"
+        name = alarm.label.upper() if alarm.label else "ALARM"
+        details = f"Alarm #{alarm.id} - {alarm.display_time()}"
         if snoozed:
-            title += "  (snoozed)"
-        bar = "=" * max(50, len(title) + 4)
+            details += " - snoozed"
+        bar = "=" * 52
         self.out.write(
-            f"\n\a{bar}\n  {title}\n{bar}\n"
-            f"  [s]nooze {self.snooze_minutes} min  /  [d]ismiss   (Enter = snooze)\n> "
+            f"\n\a{bar}\n  ⏰ ⏰ ⏰   {name}   ⏰ ⏰ ⏰\n  {details}\n{bar}\n"
+            f"  Press ENTER to snooze for {plural(self.snooze_minutes, 'minute')}.\n"
+            "  Type  stop  and press ENTER to turn it off.\n> "
         )
         self.out.flush()
 
-        self._pending = ""  # leftover keystrokes from an earlier ring must not answer this one
+        self._discard_typeahead()
         stop = threading.Event()
         bell = threading.Thread(target=self._bell_loop, args=(stop,), daemon=True)
         bell.start()
@@ -65,6 +66,17 @@ class TerminalRinger:
         finally:
             stop.set()
             bell.join()
+
+    def _discard_typeahead(self) -> None:
+        """Keystrokes typed before this ring (e.g. a 'd' typed while snoozed) sit in
+        our buffer or the terminal's input queue; they must not answer this alarm."""
+        self._pending = ""
+        if os.name == "nt":
+            return
+        fd = self.inp.fileno()
+        while select.select([fd], [], [], 0)[0]:
+            if not os.read(fd, 1024):
+                break  # EOF
 
     def _bell_loop(self, stop: threading.Event) -> None:
         while not stop.wait(self.bell_interval):
@@ -79,11 +91,13 @@ class TerminalRinger:
                 self.out.write("\n")
                 return Action.TIMEOUT
             answer = line.strip().lower()
-            if answer in ("", "s", "snooze"):
+            if answer in ("", "s", "snooze", "z", "zz"):
+                # "s" stays snooze: if someone meant "stop", the alarm rings again,
+                # which is the safe way to be wrong.
                 return Action.SNOOZE
-            if answer in ("d", "dismiss", "stop", "x"):
+            if answer in ("stop", "d", "dismiss", "x", "off", "q", "quit", "done"):
                 return Action.DISMISS
-            self.out.write("  type 's' to snooze or 'd' to dismiss\n> ")
+            self.out.write("  Press ENTER to snooze, or type stop to turn it off.\n> ")
             self.out.flush()
 
     def _readline(self, deadline: float) -> Optional[str]:

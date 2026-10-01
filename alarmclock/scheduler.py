@@ -33,6 +33,7 @@ class Scheduler:
         self.last_tick = start
         self.grace = grace
         self._snoozed: dict[int, datetime] = {}
+        self._first_tick = True
 
     def tick(self, alarms: list[Alarm], now: datetime) -> list[Event]:
         if now < self.last_tick:
@@ -42,6 +43,7 @@ class Scheduler:
             return []
 
         window_start, self.last_tick = self.last_tick, now
+        catch_up, self._first_tick = self._first_tick, False
         live_ids = {a.id for a in alarms if a.enabled}
         # Drop snoozes for alarms that were removed or disabled meanwhile.
         self._snoozed = {i: t for i, t in self._snoozed.items() if i in live_ids}
@@ -51,8 +53,16 @@ class Scheduler:
             if not alarm.enabled:
                 continue
             due = []
-            scheduled = alarm.next_trigger(window_start)
-            if scheduled is not None and scheduled <= now:
+            since = window_start
+            if catch_up and not alarm.is_recurring:
+                # A one-time alarm that is still enabled was never dismissed, so if it
+                # fell due while `alarm start` wasn't running it never rang. Ring it (within
+                # grace) or report it missed -- never let it expire silently.
+                # Recurring alarms aren't caught up: we can't tell whether that
+                # occurrence was already dismissed before a restart.
+                since = datetime.min
+            scheduled = self._latest_occurrence(alarm, since, now)
+            if scheduled is not None:
                 due.append((scheduled, False))
             snooze_until = self._snoozed.get(alarm.id)
             if snooze_until is not None and window_start < snooze_until <= now:
@@ -65,6 +75,21 @@ class Scheduler:
             kind = EventKind.MISSED if now - when > self.grace else EventKind.RING
             events.append(Event(kind, alarm, when, snoozed=from_snooze))
         return sorted(events, key=lambda e: e.scheduled)
+
+    @staticmethod
+    def _latest_occurrence(alarm: Alarm, since: datetime, now: datetime):
+        """Most recent occurrence in (since, now], or None.
+
+        After a long sleep a daily alarm has several; only the latest matters.
+        Mon 08:00 -> Wed 07:02 must ring Wednesday's 07:00 (2 min late), not
+        report Tuesday's as missed and stay silent.
+        """
+        latest = None
+        when = alarm.next_trigger(since)
+        while when is not None and when <= now:
+            latest = when
+            when = alarm.next_trigger(when)
+        return latest
 
     def snooze(self, alarm_id: int, until: datetime) -> None:
         self._snoozed[alarm_id] = until
